@@ -44,19 +44,12 @@ For video inpainting, FGVC uses flow-edge guidance for video completion \cite{ga
 
 \section{Method}
 \paragraph{Overall pipeline.}
-Figure~\ref{fig:pipeline} summarizes the system. Each method follows the same high-level structure: extract frames, estimate or prompt object masks, optionally refine masks, inpaint the masked regions, and evaluate the outputs. The parts differ mainly in the mask source and inpainting backend.
-
-% \begin{figure*}[t]
-% \centering
-% \includegraphics[width=0.96\linewidth]{figures/pipeline_flowchart_v1.png}
-% \caption{Unified roadmap used across the three project parts. The same frame, mask, inpainting, and evaluation interfaces make the classical, reproduced, and exploratory pipelines directly comparable.}
-% \label{fig:pipeline}
-% \end{figure*}
+Figure~\ref{fig:pipeline} summarizes the system. Each method follows the same high-level structure: extract frames, estimate or prompt object masks, optionally refine masks, inpaint the masked regions, and evaluate the outputs. The updated diagram also makes the comparison protocol explicit: the input and output video strips are shared across the three parts, while the middle lanes isolate the design choices that change from the classical baseline to the AI-driven reproduction and the optimized foundation-model pipeline. This layout is useful for the report because it ties the code modules, qualitative examples, and evaluation metrics to one common interface.
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.96\linewidth]{figures/pipeline_flowchart_v2.png}
-\caption{Unified roadmap used across the three project parts. The same frame, mask, inpainting, and evaluation interfaces make the classical, reproduced, and exploratory pipelines directly comparable.}
+\includegraphics[width=0.98\linewidth]{figures/pipeline_flowchart_v2.png}
+\caption{Unified video object removal and inpainting pipeline used in the report. The diagram separates the shared input--mask--refinement--inpainting--evaluation stages and the three implemented tracks: the classical YOLO/flow/Telea baseline, the SAM 2 or VGGT4D with ProPainter reproduction, and the SAM 3 optimized pipeline with side-effect masks and ProPainter, DiffuEraser, or ROSE backends.}
 \label{fig:pipeline}
 \end{figure*}
 
@@ -69,9 +62,16 @@ Part 2 tests two mask sources with the same ProPainter backend. SAM 2 receives f
 \paragraph{Part 3: optimization and extension.}
 Part 3 uses SAM 3 as the mask tracker and compares five restoration variants: ProPainter, DiffuEraser, DiffuEraser with side-effect masks, ROSE, and ROSE with side-effect masks. The side-effect mask expands the object mask, adds a shifted shadow region, and can include reflection regions for scenes where removing only the visible object leaves secondary traces. We also upgraded SAM 3 initialization to use per-object masks instead of a single union mask, matching the multi-object prompting pattern used by SAM 2. This change improves tracking stability on DAVIS.
 
+\paragraph{Implementation interface.}
+The three parts are deliberately implemented with similar intermediate artifacts. Each pipeline writes extracted frames, binary masks, restored frames or videos, and metric summaries. This makes debugging more reliable: when a result fails, we can inspect whether the error first appears in mask extraction, temporal tracking, mask post-processing, or the restoration backend. It also prevents the evaluation from favoring one implementation simply because it stores outputs in a different format. For example, Part 1 produces masks from detection and motion filtering, Part 2 produces tracked masks from a first-frame prompt or motion cue, and Part 3 produces multi-object tracked masks plus optional side-effect regions; after that point, the evaluation code can consume all masks in the same binary-mask convention.
+
+This shared interface also explains why Figure~\ref{fig:pipeline} uses three horizontal lanes instead of three unrelated diagrams. The lanes expose the actual variables under study. Part 1 asks how far hand-crafted motion filtering and temporal copying can go. Part 2 asks how much improvement comes from stronger promptable segmentation and a dedicated video inpainting model. Part 3 asks whether better object tracking and larger masks for shadows, blur, and reflections improve the final perceptual result. Keeping the input and output columns fixed avoids a misleading comparison where different videos, frame choices, or visualization styles hide the effect of the method itself.
+
 \section{Experiments}
 \paragraph{Datasets and metrics.}
 We use the mandatory bmx-trees and tennis sample sequences, two paired Wild Video clips, and the full DAVIS validation set. DAVIS evaluation reports mask quality only: JM is mean IoU over frames and JR is the fraction of frames with IoU at least 0.5. For the Wild Video pair, clean no-person videos are available, so we report PSNR and SSIM against those clean references. Full-frame PSNR/SSIM on DAVIS would compare restored backgrounds against frames that still contain foreground objects, so it is not used for the formal DAVIS table.
+
+The datasets play different roles in the analysis. DAVIS is useful for mask evaluation because it provides dense annotations over many object categories and motion patterns. The bmx-trees and tennis sequences are kept as required course cases and are also used for visual inspection because they contain thin structures, fast motion, and background details that reveal boundary errors. The paired Wild Video clips are smaller, but they are the only setting where a clean no-person target is available, so they are the proper source for PSNR and SSIM. We therefore avoid mixing incompatible metrics: DAVIS is used to measure segmentation quality, while Wild Video is used to measure restoration fidelity.
 
 \begin{table*}[t]
 \centering
@@ -104,7 +104,9 @@ Part 3 & P3 SAM 3 + ROSE-SE & 90 & \textbf{0.9423} & \textbf{0.9952} \\
 \label{fig:davis-chart}
 \end{figure*}
 
-Table~\ref{tab:davis-main} shows that mask quality dominates the task. The Part 1 baseline is conservative but limited by category detections and classical motion filtering. VGGT4D performs poorly as a direct object-removal mask extractor because its motion cues do not reliably isolate the foreground instance. SAM 2 gives a large gain, and SAM 3 further improves the average to JM 0.9423 and JR 0.9952. Since all Part 3 backends reuse the same SAM 3 masks, their DAVIS JM/JR values are identical.
+Table~\ref{tab:davis-main} shows that mask quality dominates the task. The Part 1 baseline is conservative but limited by category detections and classical motion filtering. It can remove clear moving persons, but it is not a general video object segmenter because its detector is category-dependent and its motion threshold can reject slow foreground objects. VGGT4D performs poorly as a direct object-removal mask extractor because its motion cues do not reliably isolate the foreground instance. This does not mean the geometry model is weak in its intended setting; rather, the result shows that raw dynamic-region cues are not automatically aligned with the object-removal mask required by this project.
+
+SAM 2 gives a large gain, and SAM 3 further improves the average to JM 0.9423 and JR 0.9952. Since all Part 3 backends reuse the same SAM 3 masks, their DAVIS JM/JR values are identical. This separation is important: the DAVIS table should be interpreted as a mask-tracking comparison, not as an inpainting-backend comparison. The sequence-level rows in Table~\ref{tab:sample-metrics} show the same trend at a more concrete scale. Tennis is easier for promptable video segmentation because the target is visually coherent and remains visible, while bmx-trees is harder because the rider, bicycle, and background structure produce thin boundaries and partial overlaps. Rhino is included as a failure-oriented case because it later exposes restoration difficulty even when the mask is accurate.
 
 \begin{table}[t]
 \centering
@@ -134,6 +136,10 @@ P3 SAM 3 masks & rhino & 0.9838 & 1.0000 \\
 
 \paragraph{Wild Video restoration.}
 Table~\ref{tab:wild-main} and Figure~\ref{fig:wild-chart} summarize the paired Wild Video metrics. Part 2 SAM 2 + ProPainter improves over all Part 1 variants, confirming that better video masks and temporal inpainting matter. In Part 3, DiffuEraser gives the highest PSNR, while ROSE-SE gives the highest SSIM. These metrics are useful but not complete: PSNR favors pixel-level agreement, whereas temporal flicker and perceptual sharpness still require visual inspection.
+
+The Wild Video results also show why restoration should not be ranked by one metric alone. PSNR rewards conservative reconstructions that stay close to the clean reference in average pixel value, while SSIM is more sensitive to local structure. DiffuEraser obtains the best PSNR, suggesting that its generated background is close to the paired clean frame in a mean-squared-error sense. ROSE-SE obtains the best SSIM, which is consistent with a sharper local structure after applying the side-effect mask. However, neither metric directly measures temporal stability. A method can score well on individual frames and still flicker during playback if the generated texture changes from frame to frame.
+
+For this reason, Figure~\ref{fig:part3-backends} is reported together with the numerical table. The backend comparison keeps the SAM 3 masks fixed and changes only the restoration stage, so the observed differences are attributable to the inpainting model and the side-effect mask. The side-effect mask is not expected to always improve PSNR, because it deliberately asks the model to synthesize a larger region. Its purpose is to remove traces that the object mask misses, such as shadow, reflection, or boundary blur. This trade-off explains why the best quantitative row and the most visually acceptable row may differ.
 
 \begin{table*}[t]
 \centering
@@ -176,6 +182,8 @@ Part 3 & P3 SAM 3 + ROSE-SE & 2 & 14.4286 & \textbf{0.2323} \\
 \paragraph{Qualitative comparison.}
 Figures~\ref{fig:p1-qual}--\ref{fig:p3-qual} provide the required original-mask-inpaint triptychs for each part. All three figures use the same bmx-trees frame so that the visual differences come from the pipeline rather than from video content. The Part 1 result often preserves some foreground residue because the classical temporal borrowing step depends on mask accuracy and optical-flow alignment. Part 2 benefits from sharper SAM 2 masks and ProPainter's propagation. Part 3 uses SAM 3 masks and generative restoration, which can remove the object more completely but may smooth fine background texture.
 
+Using the same frame for all three qualitative figures is intentional. If each part used a different video, the comparison would be dominated by scene difficulty instead of algorithmic behavior. The bmx-trees frame is a useful common case because the background contains rails, trees, and thin bicycle structures, so mask boundaries and inpainted texture are both visible. The triptychs should therefore be read from left to right as a diagnostic: the original frame shows the scene content, the mask panel shows what each method chooses to remove, and the restored panel shows whether the inpainting model can plausibly reconstruct the hidden background.
+
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/part1_triptych.png}
@@ -200,15 +208,60 @@ Figures~\ref{fig:p1-qual}--\ref{fig:p3-qual} provide the required original-mask-
 \paragraph{Failure analysis.}
 The most visible remaining limitation appears when the mask covers a hard background for many frames. Figure~\ref{fig:rhino-failure} shows the rhino sequence, where the occluded grass and body-sized background region remain difficult. DiffuEraser tends to generate a plausible but blurred fill when the true background is never observed for long enough. ROSE can preserve stronger texture locally, but adjacent frames may change appearance, producing background flicker. This suggests that future work should combine generative keyframe repair with explicit temporal consistency losses, flow-guided propagation, or a post-hoc deflickering module.
 
-\begin{figure*}[t]
+This failure case separates two error sources. The first source is mask error: an incomplete mask leaves parts of the object, shadow, or reflection in the result. The second source is restoration ambiguity: even with a good mask, the hidden background may never be visible in nearby frames. Part 1 mainly fails through the first source, because the mask and optical-flow alignment are fragile. Parts 2 and 3 reduce this mask problem, but they still face the second source on long occlusions. Generative backends can hallucinate a plausible patch, but they do not know the true background and may change the hallucination across frames.
+
+\begin{figure}[t]
 \centering
-\includegraphics[width=0.95\linewidth]{figures/rhino_failure_strip.png}
+\includegraphics[width=\linewidth]{figures/rhino_failure_strip.png}
 \caption{Long-mask failure on rhino. DiffuEraser can blur the generated background, while ROSE may vary between neighboring frames, producing visible flicker in video playback.}
 \label{fig:rhino-failure}
-\end{figure*}
+\end{figure}
+
+\paragraph{Practical discussion.}
+The main practical lesson is that video object removal should be treated as a pipeline problem rather than as a single-model problem. A strong inpainting backend cannot fix an object remnant that is never included in the mask, and a strong mask tracker cannot guarantee a realistic fill when the background is permanently hidden. This is why the report keeps mask metrics and restoration metrics separate. DAVIS JM/JR tells us whether the method is selecting the right pixels to remove, while Wild Video PSNR/SSIM tells us whether the completed frame matches a clean reference. The two evaluations answer different questions and should not be collapsed into one score.
+
+The second lesson is that temporal consistency is the main gap between visually plausible frame-level results and convincing video results. Part 1 uses explicit temporal borrowing, so it is interpretable but brittle. Part 2 uses ProPainter, which improves temporal propagation and reduces obvious frame-wise discontinuities. Part 3 adds generative backends, which can produce more plausible content inside large holes but may introduce new temporal variation because each synthesized region can drift. This explains why a model can improve PSNR or SSIM while still requiring qualitative video playback to detect flicker.
+
+The side-effect mask is useful when the object has secondary traces, but it also increases the restoration difficulty. Expanding the mask can remove shadows, reflections, and boundary blur that would otherwise make the edited video look fake. At the same time, the backend must synthesize a larger area, so the result can become smoother or less faithful to the clean reference. In practice, this means the side-effect mask should be selected according to the scene. For a simple walking person with a stable background, the object mask may be enough. For reflective floors, strong shadows, or motion blur, a larger mask is more defensible even if pixel metrics do not always improve.
+
+\paragraph{Part-by-part takeaways.}
+Part 1 is valuable because it exposes every assumption in a video object removal pipeline. The detector decides which instances are even considered; the sparse optical-flow filter decides whether the instance is dynamic enough to remove; the dilation radius decides how much boundary uncertainty is tolerated; and the temporal propagation window decides how much neighboring evidence is available for filling. These choices are easy to inspect and modify, but they also create many failure points. A small detection miss or an incorrect motion threshold can propagate to the final inpainted video. This explains why the Part 1 results are useful as a baseline but not competitive with promptable video segmentation.
+
+Part 2 is the strongest reproduction-style pipeline because it replaces several brittle hand-crafted decisions with learned temporal segmentation and learned video inpainting. SAM 2 provides object-consistent masks after a first-frame prompt, and ProPainter is designed for temporal content propagation rather than independent per-frame filling. The VGGT4D branch is still informative even though its mask metrics are low: it shows that not every strong visual foundation model is directly suitable for object removal. A motion or geometry cue must be converted into an object-specific removal mask, otherwise the inpainting model receives the wrong hole.
+
+Part 3 is the most flexible pipeline because it separates three choices that are often coupled in end-to-end demos: mask tracking, side-effect mask construction, and restoration backend. SAM 3 improves the mask side of the task, while DiffuEraser and ROSE explore different generative restoration behaviors. This makes Part 3 a useful platform for ablation even when the final perceptual quality is mixed. The results suggest that the largest remaining gains will not come from simply swapping one backend for another, but from making the backend temporally aware of the mask history and the visible background evidence.
+
+\paragraph{Evaluation limitations.}
+The current evaluation is intentionally conservative. DAVIS gives high-quality segmentation ground truth, but it does not provide clean background frames for object-removal PSNR and SSIM. Wild Video provides paired clean references, but only for a small number of clips. As a result, the report combines broad mask evaluation with narrower restoration evaluation. This is a reasonable compromise for the course project, but it also means the tables should be read as complementary evidence rather than a complete benchmark.
+
+Another limitation is that the report uses frame-level restoration metrics but discusses video-level artifacts. PSNR and SSIM are computed per frame and then averaged, so they cannot directly penalize temporal flicker. A future benchmark should include temporal metrics, such as warping the previous restored frame into the current frame with optical flow and measuring the error inside the edited region. User studies or side-by-side video playback would also be useful because small temporal changes can be more noticeable to humans than a modest difference in average PSNR.
+
+\paragraph{Engineering lessons.}
+The codebase structure matters for a project with three independently developed parts. Saving masks and restored frames as explicit intermediate outputs made it possible to reuse evaluation scripts and to diagnose failures without rerunning the whole pipeline. It also made the report figures easier to generate consistently. The revised qualitative figures use the same bmx-trees frame for all three parts for exactly this reason: when the file layout and visualization protocol are shared, visual differences are more likely to reflect algorithmic differences rather than plotting or dataset choices.
+
+The same principle applies to the new pipeline figure. The figure is not only a decorative overview; it is a map of the repository. The left side corresponds to frame extraction and input videos, the center lanes correspond to the three implementation tracks, and the right side corresponds to restored outputs and evaluation scripts. This alignment between figure, code, and report text reduces ambiguity for the reader and makes the comparison easier to audit.
 
 \section{Conclusion}
-The experiments show that video object removal is mask-limited before it is inpainting-limited. The classical Part 1 pipeline is useful for understanding the mechanics of detection, motion filtering, temporal borrowing, and spatial fallback, but it cannot match promptable video segmentation. Part 2 confirms that SAM 2 + ProPainter is a strong practical baseline. Part 3 improves DAVIS mask quality with SAM 3 multi-object initialization and explores generative backends that improve Wild Video perceptual metrics. The main limitation remains long-duration occlusion: when the true background is hidden for many frames, generative methods can blur, and video diffusion methods can flicker. Future work should add mid-sequence re-prompting, uncertainty-aware mask correction, and temporally consistent generative refinement.
+The experiments show that video object removal is mask-limited before it is inpainting-limited. The classical Part 1 pipeline is useful for understanding the mechanics of detection, motion filtering, temporal borrowing, and spatial fallback, but it cannot match promptable video segmentation. Part 2 confirms that SAM 2 + ProPainter is a strong practical baseline because it combines accurate video masks with a temporal inpainting model. Part 3 improves DAVIS mask quality with SAM 3 multi-object initialization and explores generative backends that improve Wild Video perceptual metrics.
+
+The final system comparison also clarifies the trade-off between controllability and generative quality. The hand-crafted baseline is the easiest to inspect and debug, but it is constrained by detector categories and optical-flow assumptions. The SAM 2 + ProPainter reproduction is the most balanced pipeline in terms of reliability and implementation simplicity. The SAM 3 variants are strongest for mask tracking and allow more flexible side-effect handling, but the inpainting backend still determines whether the final video looks temporally stable.
+
+The main limitation remains long-duration occlusion: when the true background is hidden for many frames, generative methods can blur, and video diffusion methods can flicker. Future work should add mid-sequence re-prompting, uncertainty-aware mask correction, and temporally consistent generative refinement. A stronger follow-up would also evaluate temporal consistency directly, for example by measuring frame-to-frame warping error in the restored region, because PSNR and SSIM alone cannot fully describe video-level artifacts.
+
+\paragraph{Future work.}
+The most immediate extension is interactive correction. In the current pipelines, a first-frame prompt or automatic mask source is expected to remain reliable throughout the video. This assumption breaks when the target object changes appearance, leaves the frame, becomes occluded, or overlaps with a similar object. A practical system should allow mid-sequence re-prompting and then propagate the corrected mask forward and backward. This would keep the user effort small while preventing one early tracking error from damaging the entire video.
+
+A second extension is mask uncertainty modeling. The present evaluation treats every mask as a binary decision, but object boundaries, motion blur, shadows, and reflections are naturally uncertain. Instead of using one fixed dilation radius or one manually designed side-effect mask, the pipeline could maintain a soft confidence map. Pixels with high object probability would be removed aggressively, while low-confidence boundary pixels could be handled with a softer blending or refinement step. This would make the system less sensitive to a single threshold and could reduce both object remnants and unnecessary background destruction.
+
+A third extension is temporally consistent generative repair. DiffuEraser and ROSE can synthesize plausible image content, but the report shows that plausible individual frames are not enough for video. A stronger backend should condition on neighboring restored frames, optical-flow correspondences, or a persistent latent representation of the synthesized background. The goal is not only to fill the current hole, but to keep the generated texture stable as the camera and object move. This is especially important for grass, water, rails, and repeated patterns, where small frame-to-frame changes are easy to notice.
+
+Finally, the evaluation protocol should be expanded. The current report already separates mask quality, paired-reference restoration quality, and qualitative examples, but future work should add temporal metrics and more paired videos. A useful benchmark would include clean references for multiple object sizes, camera motions, shadows, reflections, and long occlusions. It would also report both full-frame scores and edited-region scores, because full-frame PSNR can hide failures when the removed object covers only a small part of the image. With these additions, the project could move from a course comparison toward a more complete benchmark for practical video object removal.
+
+From an engineering perspective, a deployable system should also expose intermediate quality checks. Before running a costly generative inpainting backend, the system can preview mask coverage, mask stability, and side-effect regions. If the mask is unstable, the user should correct the prompt before inpainting rather than discover the error after the final video is rendered. If the mask is stable but too tight, the system can recommend a side-effect mask. If the mask is too large, it can warn that the backend may over-smooth the background. These checks are simple, but they match the failure modes observed in this project.
+
+Runtime is another practical concern. The classical pipeline is lightweight and easy to run on CPU, but its quality ceiling is low. The SAM 2 and SAM 3 pipelines require stronger hardware, yet they save manual editing time by producing coherent masks across frames. The generative backends are the most expensive part, so they should be used selectively: short clips, difficult holes, or final high-quality outputs benefit most from them. A pragmatic workflow would therefore use a fast mask preview, run ProPainter as a stable baseline, and reserve DiffuEraser or ROSE for cases where the baseline leaves visible artifacts.
+
+Overall, the project suggests a staged editing workflow. First, obtain a temporally stable object mask. Second, decide whether secondary traces require mask expansion. Third, run a temporal inpainting backend and inspect playback rather than isolated frames. Fourth, use generative repair only where the temporal method cannot recover the hidden background. This staged view is more reliable than choosing one model name as the answer to video object removal, because the best choice depends on the video content, the object motion, and the desired trade-off between speed, stability, and visual realism.
 
 \clearpage
 {\small
