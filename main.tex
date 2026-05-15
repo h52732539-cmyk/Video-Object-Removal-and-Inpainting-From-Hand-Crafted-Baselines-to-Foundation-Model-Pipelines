@@ -46,9 +46,16 @@ For video inpainting, FGVC uses flow-edge guidance for video completion \cite{ga
 \paragraph{Overall pipeline.}
 Figure~\ref{fig:pipeline} summarizes the system. Each method follows the same high-level structure: extract frames, estimate or prompt object masks, optionally refine masks, inpaint the masked regions, and evaluate the outputs. The parts differ mainly in the mask source and inpainting backend.
 
+% \begin{figure*}[t]
+% \centering
+% \includegraphics[width=0.96\linewidth]{figures/pipeline_flowchart_v1.png}
+% \caption{Unified roadmap used across the three project parts. The same frame, mask, inpainting, and evaluation interfaces make the classical, reproduced, and exploratory pipelines directly comparable.}
+% \label{fig:pipeline}
+% \end{figure*}
+
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.96\linewidth]{figures/pipeline_flowchart.png}
+\includegraphics[width=0.96\linewidth]{figures/pipeline_flowchart_v2.png}
 \caption{Unified roadmap used across the three project parts. The same frame, mask, inpainting, and evaluation interfaces make the classical, reproduced, and exploratory pipelines directly comparable.}
 \label{fig:pipeline}
 \end{figure*}
